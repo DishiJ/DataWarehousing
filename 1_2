@@ -1,0 +1,308 @@
+DROP TABLE time_dim CASCADE CONSTRAINTS;
+
+DROP TABLE season_dim CASCADE CONSTRAINTS;
+
+DROP TABLE servicecosttype_dim CASCADE CONSTRAINTS;
+
+DROP TABLE location_dim CASCADE CONSTRAINTS;
+
+DROP TABLE service_type_dim CASCADE CONSTRAINTS;
+
+DROP TABLE age_dim CASCADE CONSTRAINTS;
+
+DROP TABLE temp_hospital_fact CASCADE CONSTRAINTS;
+
+DROP TABLE hospital_fact CASCADE CONSTRAINTS;
+
+CREATE TABLE time_dim
+    AS
+        SELECT DISTINCT
+            TO_CHAR(patient_service_start_date, 'yyyy')
+            || TO_CHAR(patient_service_start_date, 'mon') AS time_id,
+            TO_CHAR(patient_service_start_date, 'yyyy') AS year,
+            TO_CHAR(patient_service_start_date, 'mon') AS month
+        FROM
+            assignment;
+
+CREATE TABLE season_dim (
+    season_id     VARCHAR2(20) NOT NULL,
+    season_desc   VARCHAR2(20) NOT NULL
+);
+
+INSERT INTO season_dim VALUES (
+    'Winter',
+    'jun-aug'
+);
+
+INSERT INTO season_dim VALUES (
+    'Spring',
+    'sep-nov'
+);
+
+INSERT INTO season_dim VALUES (
+    'Autumn',
+    'mar-may'
+);
+
+INSERT INTO season_dim VALUES (
+    'Summer',
+    'dec-feb'
+);
+
+
+CREATE TABLE location_dim
+    AS
+        ( SELECT DISTINCT
+            postcode,
+            suburb
+        FROM
+            clinic
+        );
+
+
+CREATE TABLE service_type_dim
+    AS
+        ( SELECT DISTINCT
+            service_name
+        FROM
+            service
+        );
+
+
+CREATE TABLE age_dim (
+    age_id     VARCHAR2(20) NOT NULL,
+    age_desc   VARCHAR2(20) NOT NULL
+);
+
+INSERT INTO age_dim VALUES (
+    'Infant',
+    '<1'
+);
+
+INSERT INTO age_dim VALUES (
+    'Children',
+    '1<18'
+);
+
+INSERT INTO age_dim VALUES (
+    'Adult',
+    '18<65'
+);
+
+INSERT INTO age_dim VALUES (
+    'Senior',
+    '65+'
+);
+
+
+CREATE TABLE servicecosttype_dim (
+    service_costtype_id     VARCHAR2(20) NOT NULL,
+    service_costtype_desc   VARCHAR2(20) NOT NULL
+);
+
+INSERT INTO servicecosttype_dim VALUES (
+    'Low price',
+    '<20'
+);
+
+INSERT INTO servicecosttype_dim VALUES (
+    'Medium price',
+    '20<50'
+);
+
+INSERT INTO servicecosttype_dim VALUES (
+    'High price',
+    '50+'
+);
+
+
+CREATE TABLE temp_hospital_fact
+    AS
+        SELECT
+            TO_CHAR(a.patient_service_start_date, 'yyyy') AS year,
+            TO_CHAR(a.patient_service_start_date, 'mon') AS month,
+            s.service_cost,
+            c.postcode,
+            s.service_name,
+            p.patient_age,
+            p.patient_id
+        FROM
+            assignment   a,
+            service      s,
+            clinic       c,
+            patient      p
+        WHERE
+            s.service_id = a.service_id
+            AND a.patient_id = p.patient_id
+            AND s.hospital_id = c.hospital_id;
+
+
+ALTER TABLE temp_hospital_fact ADD (
+    time_id               VARCHAR2(20),
+    season_id             VARCHAR2(20),
+    service_costtype_id   VARCHAR2(20),
+    age_id                VARCHAR2(20)
+);
+
+UPDATE temp_hospital_fact
+SET
+    time_id = year || month;
+
+UPDATE temp_hospital_fact
+SET
+    season_id = 'Winter'
+WHERE
+    month IN (
+        'jun',
+        'jul',
+        'aug'
+    );
+
+UPDATE temp_hospital_fact
+SET
+    season_id = 'Summer'
+WHERE
+    month IN (
+        'dec',
+        'jan',
+        'feb'
+    );
+
+UPDATE temp_hospital_fact
+SET
+    season_id = 'Spring'
+WHERE
+    month IN (
+        'sep',
+        'oct',
+        'nov'
+    );
+
+UPDATE temp_hospital_fact
+SET
+    season_id = 'Autumn'
+WHERE
+    month IN (
+        'mar',
+        'apr',
+        'may'
+    );
+
+UPDATE temp_hospital_fact
+SET
+    service_costtype_id = 'Low Price'
+WHERE
+    service_cost < 20;
+
+UPDATE temp_hospital_fact
+SET
+    service_costtype_id = 'Medium Price'
+WHERE
+    service_cost BETWEEN 20 AND 50;
+
+UPDATE temp_hospital_fact
+SET
+    service_costtype_id = 'High Price'
+WHERE
+    service_cost > 50;
+
+UPDATE temp_hospital_fact
+SET
+    age_id = 'Infant'
+WHERE
+    patient_age < 1;
+
+UPDATE temp_hospital_fact
+SET
+    age_id = 'Children'
+WHERE
+    patient_age BETWEEN 1 AND 18;
+
+UPDATE temp_hospital_fact
+SET
+    age_id = 'Adult'
+WHERE
+    patient_age BETWEEN 19 AND 65;
+
+UPDATE temp_hospital_fact
+SET
+    age_id = 'Senior'
+WHERE
+    patient_age > 65;
+
+
+CREATE TABLE hospital_fact
+    AS
+        SELECT
+            time_id,
+            season_id,
+            service_costtype_id,
+            postcode,
+            service_name,
+            age_id,
+            COUNT(patient_id) AS total_no_of_patients,
+            SUM(service_cost) AS total_service_cost
+        FROM
+            temp_hospital_fact
+        GROUP BY
+            time_id,
+            season_id,
+            service_costtype_id,
+            postcode,
+            service_name,
+            age_id;
+
+
+
+--A
+
+SELECT
+    SUM(total_no_of_patients) AS total_patients
+FROM
+    hospital_fact
+WHERE
+    season_id = 'Winter'
+ORDER BY
+    total_patients;
+
+--B
+
+SELECT
+    service_costtype_id,
+    '$' || SUM(total_service_cost) as total_service_charged
+FROM
+    hospital_fact
+GROUP BY
+    service_costtype_id
+ORDER BY
+    service_costtype_id;
+
+--C
+
+SELECT
+    age_id,
+    SUM(total_no_of_patients) AS total_patients
+FROM
+    hospital_fact
+WHERE
+    time_id = '2020apr'
+GROUP BY
+    age_id
+ORDER BY
+    age_id;
+
+--D
+
+SELECT
+    l.suburb,
+    '$' || SUM(h.total_service_cost) AS total_service_cost
+FROM
+    location_dim    l,
+    hospital_fact   h
+WHERE
+    h.service_name = 'mental health'
+    AND h.postcode = l.postcode
+GROUP BY
+    l.suburb
+ORDER BY
+    l.suburb;

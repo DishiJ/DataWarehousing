@@ -1,0 +1,242 @@
+DROP TABLE accident_event_dim CASCADE CONSTRAINTS;
+
+DROP TABLE location_dim CASCADE CONSTRAINTS;
+
+DROP TABLE lightening_period_dim CASCADE CONSTRAINTS;
+
+DROP TABLE police_branch_dim CASCADE CONSTRAINTS;
+
+DROP TABLE accident_dim CASCADE CONSTRAINTS;
+
+DROP TABLE accident_model_dim CASCADE CONSTRAINTS;
+
+DROP TABLE vehicle_model_dim CASCADE CONSTRAINTS;
+
+DROP TABLE temp_accident_fact CASCADE CONSTRAINTS;
+
+DROP TABLE accident_fact CASCADE CONSTRAINTS;
+
+CREATE TABLE accident_event_dim
+    AS
+        SELECT DISTINCT
+            accident_event
+        FROM
+            accident.accident;
+
+CREATE TABLE location_dim
+    AS
+        SELECT DISTINCT
+            accident_location_code,
+            accident_street,
+            accident_suburb
+        FROM
+            accident.accident;
+
+CREATE TABLE lightening_period_dim (
+    period_name   VARCHAR2(50) NOT NULL,
+    period_desc   VARCHAR2(50) NOT NULL
+);
+
+INSERT INTO lightening_period_dim VALUES (
+    'daytime',
+    '6AM - 5:59PM'
+);
+
+INSERT INTO lightening_period_dim VALUES (
+    'nighttime',
+    '6PM - 5:59AM'
+);
+
+CREATE TABLE police_branch_dim
+    AS
+        SELECT DISTINCT
+            officer_branch
+        FROM
+            accident.police_officer;
+
+CREATE TABLE accident_dim
+    AS
+        SELECT
+            accident.a.accident_no,
+            1.0 / COUNT(accident.v.vehicle_no) AS weight_factor,
+            LISTAGG(accident.v.vehicle_no, '_') WITHIN GROUP(
+                ORDER BY
+                    accident.v.vehicle_no
+            ) AS vehicle_agg_list
+        FROM
+            accident.accident          a,
+            accident.accident_record   ar,
+            accident.vehicle           v
+        WHERE
+            a.accident_no = ar.accident_no
+            AND ar.vehicle_no = v.vehicle_no
+        GROUP BY
+            accident.a.accident_no;
+
+CREATE TABLE accident_model_dim
+    AS
+        SELECT
+            accident.a.accident_no,
+            accident.v.vehicle_no
+        FROM
+            accident.accident          a,
+            accident.accident_record   ar,
+            accident.vehicle           v
+        WHERE
+            a.accident_no = ar.accident_no
+            AND ar.vehicle_no = v.vehicle_no
+        ORDER BY
+            a.accident_no;
+
+CREATE TABLE vehicle_model_dim
+    AS
+        SELECT DISTINCT
+            vehicle_no,
+            vehicle_model,
+            vehicle_make
+        FROM
+            accident.vehicle;
+
+CREATE TABLE temp_accident_fact
+    AS
+        SELECT
+            a.accident_event,
+            a.accident_location_code   AS location_code,
+            TO_CHAR(a.accident_date_time, 'HH:MM:SS AM') AS accident_time,
+            p.officer_branch           AS branch_name,
+            a.accident_no,
+            v.vehicle_no
+        FROM
+            accident.accident          a,
+            accident.police_officer    p,
+            accident.vehicle           v,
+            accident.accident_record   ar
+        WHERE
+            a.accident_no = ar.accident_no
+            AND ar.vehicle_no = v.vehicle_no
+            AND a.officer_id = p.officer_id
+        ORDER BY
+            a.accident_no;
+
+ALTER TABLE temp_accident_fact ADD (
+    period_name VARCHAR2(50)
+);
+
+UPDATE temp_accident_fact
+SET
+    period_name =
+        CASE
+            WHEN CAST(accident_time AS time) BETWEEN CAST('06:00:00 am' AS time) AND CAST('05:59:59 pm' AS time) THEN
+                'Daytime'
+            ELSE
+                'Nighttime'
+        END;
+
+CREATE TABLE accident_fact
+    AS
+        SELECT
+            accident_event,
+            location_code,
+            period_name,
+            branch_name,
+            accident_no,
+            COUNT(accident_no) AS total_no_of_accidents,
+            COUNT(vehicle_no) AS total_vehicles_involved
+        FROM
+            temp_accident_fact
+        GROUP BY
+            accident_event,
+            location_code,
+            period_name,
+            branch_name,
+            accident_no;
+
+COMMIT;
+--A
+
+SELECT
+    l.accident_suburb,
+    f.period_name,
+    SUM(total_no_of_accidents) AS total_accidents
+FROM
+    accident_fact   f,
+    location_dim    l
+WHERE
+    l.accident_location_code = f.location_code
+GROUP BY
+    l.accident_suburb,
+    f.period_name
+ORDER BY
+    l.accident_suburb;
+
+--
+
+SELECT
+    v.vehicle_model,
+    COUNT(f.total_no_of_accidents) AS total_accidents
+FROM
+    accident_fact        f,
+    accident_dim         a,
+    vehicle_model_dim    v,
+    accident_model_dim   am
+WHERE
+    f.accident_no = a.accident_no
+    AND a.accident_no = am.accident_no
+    AND am.vehicle_no = v.vehicle_no
+GROUP BY
+    v.vehicle_model
+ORDER BY
+    total_accidents DESC;
+
+--Q3
+
+SELECT
+    f.accident_event,
+    l.accident_suburb,
+    SUM(f.total_vehicles_involved) AS vehicles_involved
+FROM
+    accident_fact   f,
+    location_dim    l
+WHERE
+    f.location_code = l.accident_location_code
+GROUP BY
+    f.accident_event,
+    l.accident_suburb
+ORDER BY
+    f.accident_event;
+
+--Q4
+
+SELECT
+    branch_name,
+    SUM(total_no_of_accidents) AS total_accidents
+FROM
+    accident_fact
+GROUP BY
+    branch_name
+ORDER BY
+    branch_name;
+
+--Q5 vehicles involved in daytime and nighttime
+
+SELECT
+    period_name,
+    SUM(total_vehicles_involved) AS total_vehicles
+FROM
+    accident_fact
+GROUP BY
+    period_name
+ORDER BY
+    period_name;
+
+--Q6 total accidents for each accident event
+
+SELECT
+    accident_event,
+    COUNT(total_no_of_accidents) AS total_accidents
+FROM
+    accident_fact
+GROUP BY
+    accident_event
+ORDER BY
+    accident_event;
